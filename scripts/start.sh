@@ -1,3 +1,5 @@
 #!/usr/bin/env bash
 
-uvicorn main:app --reload
+source .env
+
+uvicorn main:app --host $APP_HOST --port $APP_PORT --reload
