@@ -65,13 +65,14 @@ def configure_logging(app_env: str, log_level: str | int) -> None:
 
     _ROOT_LOGGER.addHandler(handler)
 
-    # defer logging control to the root logger
     for name in stdlib_logging.root.manager.loggerDict:
         logger = stdlib_logging.getLogger(name)
 
-        logger.handlers = []
+        # defer logging control to the root logger
         logger.propagate = True
         logger.setLevel(log_level)
+        for handler in logger.handlers:
+            logger.removeHandler(handler)
 
 
 def debug(*args, **kwargs) -> None:
