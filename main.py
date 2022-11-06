@@ -8,6 +8,9 @@ import databases
 import logger
 import settings
 
+logger.configure_logging(app_env=settings.APP_ENV,
+                         log_level=settings.APP_LOG_LEVEL)
+
 
 def dsn(driver: str, user: str, password: str,
         host: str, port: int, database: str) -> str:
