@@ -1,0 +1,7 @@
+databases[mysql]==0.5.5
+fastapi
+python-dotenv
+python-multipart
+structlog
+sqlalchemy==1.4.41
+uvicorn
