@@ -47,7 +47,7 @@ async def get_file(file_path: str):
 
     # make sure the file is in the upload directory (fastapi does not protect us)
     if os.path.commonpath([file_path, settings.UPLOAD_DIR]) != settings.UPLOAD_DIR:
-        return fastapi.responses.JSONResponse(status_code=404,
+        return fastapi.responses.JSONResponse(status_code=fastapi.status.HTTP_404_NOT_FOUND,
                                               content={"error": "File not found"})
 
     if not os.path.exists(file_path):
@@ -74,7 +74,7 @@ async def post_file(file: fastapi.UploadFile = fastapi.File(...),
     if user is None:
         logger.warning("Invalid token", token=token, user_agent=user_agent)
         return fastapi.responses.JSONResponse(
-            status_code=403,
+            status_code=fastapi.status.HTTP_403_FORBIDDEN,
             content={"error": "Forbidden"},
         )
 
