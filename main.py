@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import atexit
 import os.path
 import secrets
 
@@ -10,6 +11,9 @@ import settings
 
 logger.configure_logging(app_env=settings.APP_ENV,
                          log_level=settings.APP_LOG_LEVEL)
+
+logger.overwrite_exception_hook()
+atexit.register(logger.restore_exception_hook)
 
 
 def dsn(driver: str, user: str, password: str,
@@ -29,14 +33,12 @@ app = fastapi.FastAPI()
 
 @app.on_event("startup")
 async def on_startup():
-    logger.overwrite_exception_hook()
     await database.connect()
 
 
 @app.on_event("shutdown")
 async def on_shutdown():
     await database.disconnect()
-    logger.restore_exception_hook()
 
 
 @app.get("/{file_path:path}")
