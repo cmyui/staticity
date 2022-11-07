@@ -59,6 +59,15 @@ async def get_file(file_path: str):
     return fastapi.responses.FileResponse(file_path)
 
 
+def generate_file_name_and_path(extension: str) -> tuple[str, str]:
+    num_chars = secrets.randbelow(9) + 8  # 8-16 bytes; 11-22 chars
+    while True:
+        file_name = f"{secrets.token_urlsafe(num_chars)}.{extension}"
+        file_path = os.path.join(settings.UPLOAD_DIR, file_name)
+        if not os.path.exists(file_path):
+            return file_name, file_path
+
+
 @app.post("/")
 async def post_file(file: fastapi.UploadFile = fastapi.File(...),
                     token: str = fastapi.Header(...),
@@ -79,13 +88,7 @@ async def post_file(file: fastapi.UploadFile = fastapi.File(...),
         )
 
     extension = file.filename.rsplit(".", maxsplit=1)[1]
-
-    num_chars = secrets.randbelow(9) + 8  # 8-16 bytes; 11-22 chars
-    while True:
-        file_name = f"{secrets.token_urlsafe(num_chars)}.{extension}"
-        file_path = os.path.join(settings.UPLOAD_DIR, file_name)
-        if not os.path.exists(file_path):
-            break
+    file_name, file_path = generate_file_name_and_path(extension)
 
     with open(file_path, "wb") as f:
         f.write(await file.read())
