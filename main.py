@@ -93,6 +93,8 @@ async def post_file(file: fastapi.UploadFile = fastapi.File(...),
     with open(file_path, "wb") as f:
         f.write(await file.read())
 
+    file_size = os.path.getsize(file_path)
+
     query = """\
         INSERT INTO uploads (name, user_id, size)
              VALUES (:name, :user_id, :size)
@@ -100,11 +102,11 @@ async def post_file(file: fastapi.UploadFile = fastapi.File(...),
     params = {
         "name": file_name,
         "user_id": user["id"],
-        "size": os.path.getsize(file_path),
+        "size": file_size,
     }
     await database.execute(query, params)
 
-    logger.info("File uploaded", file_name=file_name, user_id=user["id"],
-                user_name=user["name"], user_agent=user_agent)
+    logger.info("File uploaded", file_name=file_name, file_size=file_size,
+                user_id=user["id"], user_name=user["name"], user_agent=user_agent)
 
     return fastapi.Response(f"{settings.DOMAIN}/{file_name}".encode())
