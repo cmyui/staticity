@@ -5,9 +5,12 @@ import secrets
 
 import fastapi
 import databases
+import ddtrace
 
 import logger
 import settings
+
+ddtrace.patch_all()
 
 logger.configure_logging(app_env=settings.APP_ENV,
                          log_level=settings.APP_LOG_LEVEL)

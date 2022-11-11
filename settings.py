@@ -20,3 +20,6 @@ DB_NAME = os.environ["DB_NAME"]
 DOMAIN = os.environ["DOMAIN"]
 
 UPLOAD_DIR = os.environ["UPLOAD_DIR"]
+
+DD_SERVICE = os.environ["DD_SERVICE"]
+DD_ENV = os.environ["DD_ENV"]
