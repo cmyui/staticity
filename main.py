@@ -50,7 +50,7 @@ async def get_file(file_path: str):
         return fastapi.responses.JSONResponse(status_code=fastapi.status.HTTP_404_NOT_FOUND,
                                               content={"error": "File not found"})
 
-    if not os.path.exists(file_path):
+    if not os.path.exists(file_path) or file_path == settings.UPLOAD_DIR:
         return fastapi.responses.JSONResponse(
             status_code=404,
             content={"error": "File not found"},
