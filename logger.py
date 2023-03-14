@@ -11,7 +11,7 @@ from structlog.types import WrappedLogger
 
 _ROOT_LOGGER = stdlib_logging.getLogger()
 
-_REQUEST_ID_CONTEXT = ContextVar("request_id")
+_REQUEST_ID_CONTEXT: ContextVar[str | None] = ContextVar("request_id")
 
 
 def set_request_id(request_id: str | None) -> None:
