@@ -16,12 +16,12 @@ logger.overwrite_exception_hook()
 atexit.register(logger.restore_exception_hook)
 
 
-def dsn(driver: str, user: str, password: str,
+def dsn(scheme: str, user: str, password: str,
         host: str, port: int, database: str) -> str:
-    return f"{driver}://{user}:{password}@{host}:{port}/{database}"
+    return f"{scheme}://{user}:{password}@{host}:{port}/{database}"
 
 
-database = databases.Database(dsn(driver="mysql",
+database = databases.Database(dsn(scheme="mysql",
                                   user=settings.DB_USER,
                                   password=settings.DB_PASS,
                                   host=settings.DB_HOST,
