@@ -81,13 +81,20 @@ async def get_file(file_name: str, byte_range: str | None = fastapi.Header(None,
             content={"error": "Range not satisfiable"},
         )
 
+    media_type = mimetypes.guess_type(file_name)[0] or "text/plain"
+
     headers = {
         "Content-Length": str(upload["ContentLength"]),
         "Accept-Ranges": "bytes",
         "Cache-Control": CACHE_CONTROL,
+        # the media type is the extension's: browsers mustn't guess another from the contents
+        "X-Content-Type-Options": "nosniff",
     }
     if "ContentRange" in upload:
         headers["Content-Range"] = upload["ContentRange"]
+    # no upload runs scripts as this site, whatever it renders as; Chrome won't show a PDF in a sandbox, though
+    if media_type != "application/pdf":
+        headers["Content-Security-Policy"] = "sandbox"
 
     async def contents():
         async with upload["Body"] as body:
@@ -96,7 +103,7 @@ async def get_file(file_name: str, byte_range: str | None = fastapi.Header(None,
 
     return fastapi.responses.StreamingResponse(contents(),
                                                status_code=206 if "ContentRange" in upload else 200,
-                                               media_type=mimetypes.guess_type(file_name)[0] or "text/plain",
+                                               media_type=media_type,
                                                headers=headers)
 
 
