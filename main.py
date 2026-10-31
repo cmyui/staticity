@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import atexit
 import contextlib
+import hashlib
 import mimetypes
 import re
 import secrets
@@ -118,13 +119,14 @@ async def post_file(file: fastapi.UploadFile = fastapi.File(...),
     query = """\
         SELECT id, name, priv
           FROM users
-         WHERE token = :token
+         WHERE token_hash = :token_hash
            AND priv & 1
     """
-    params = {"token": token}
+    # stored as their SHA-256, so the table holds no token that works
+    params = {"token_hash": hashlib.sha256(token.encode()).hexdigest()}
     user = await database.fetch_one(query, params)
     if user is None:
-        logger.warning("Invalid token", token=token, user_agent=user_agent)
+        logger.warning("Invalid token", user_agent=user_agent)
         return fastapi.responses.JSONResponse(
             status_code=fastapi.status.HTTP_403_FORBIDDEN,
             content={"error": "Forbidden"},
