@@ -62,14 +62,31 @@ app = fastapi.FastAPI(lifespan=lifespan)
 
 # one path segment: a slash, even percent-encoded, matches no route
 @app.get("/{file_name}")
-async def get_file(file_name: str):
+async def get_file(file_name: str, byte_range: str | None = fastapi.Header(None, alias="range")):
+    # the bucket parses the range, and answers with the part (and its Content-Range) when it is satisfiable
     try:
-        upload = await s3.get_object(Bucket=settings.S3_BUCKET_NAME, Key=file_name)
+        upload = await s3.get_object(Bucket=settings.S3_BUCKET_NAME, Key=file_name,
+                                     **({"Range": byte_range} if byte_range else {}))
     except s3.exceptions.NoSuchKey:
         return fastapi.responses.JSONResponse(
             status_code=404,
             content={"error": "File not found"},
         )
+    except s3.exceptions.ClientError as error:
+        if error.response["Error"]["Code"] != "InvalidRange":
+            raise
+        return fastapi.responses.JSONResponse(
+            status_code=fastapi.status.HTTP_416_RANGE_NOT_SATISFIABLE,
+            content={"error": "Range not satisfiable"},
+        )
+
+    headers = {
+        "Content-Length": str(upload["ContentLength"]),
+        "Accept-Ranges": "bytes",
+        "Cache-Control": CACHE_CONTROL,
+    }
+    if "ContentRange" in upload:
+        headers["Content-Range"] = upload["ContentRange"]
 
     async def contents():
         async with upload["Body"] as body:
@@ -77,9 +94,9 @@ async def get_file(file_name: str):
                 yield chunk
 
     return fastapi.responses.StreamingResponse(contents(),
+                                               status_code=206 if "ContentRange" in upload else 200,
                                                media_type=mimetypes.guess_type(file_name)[0] or "text/plain",
-                                               headers={"Content-Length": str(upload["ContentLength"]),
-                                                        "Cache-Control": CACHE_CONTROL})
+                                               headers=headers)
 
 
 async def generate_file_name(extension: str) -> str:
