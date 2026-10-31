@@ -8,7 +8,6 @@ import secrets
 import aiobotocore.session
 import fastapi
 import databases
-import upsampling
 
 import logger
 import settings
@@ -126,8 +125,6 @@ async def post_file(file: fastapi.UploadFile = fastapi.File(...),
 
     contents = await file.read()
     await s3.put_object(Bucket=settings.S3_BUCKET_NAME, Key=file_name, Body=contents)
-
-    #upsampling.upsample_image_file(file_path)
 
     file_size = len(contents)
 
