@@ -31,35 +31,30 @@ database = databases.Database(dsn(scheme="mysql",
                                   port=settings.DB_PORT,
                                   database=settings.DB_NAME))
 
-# holds the bucket's client (s3) from startup to shutdown
-exit_stack = contextlib.AsyncExitStack()
-
 # letters and digits only, so a file name is never more than one path segment; up to 9 so the longest name
 # (22 characters, a dot and the extension) fits uploads.name
 EXTENSION = re.compile(r"[A-Za-z0-9]{1,9}")
 
-app = fastapi.FastAPI()
 
-
-@app.on_event("startup")
-async def on_startup():
+@contextlib.asynccontextmanager
+async def lifespan(app: fastapi.FastAPI):
     global s3
     await database.connect()
 
     # the uploads, keyed by file name
-    s3 = await exit_stack.enter_async_context(aiobotocore.session.get_session().create_client(
+    async with aiobotocore.session.get_session().create_client(
         "s3",
         endpoint_url=settings.S3_ENDPOINT_URL,
         region_name=settings.S3_REGION,
         aws_access_key_id=settings.S3_ACCESS_KEY_ID,
         aws_secret_access_key=settings.S3_SECRET_ACCESS_KEY,
-    ))
+    ) as s3:
+        yield
 
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    await exit_stack.aclose()
     await database.disconnect()
+
+
+app = fastapi.FastAPI(lifespan=lifespan)
 
 
 # one path segment: a slash, even percent-encoded, matches no route

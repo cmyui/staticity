@@ -1,0 +1,8 @@
+aiobotocore
+cryptography
+databases[mysql]
+fastapi
+python-dotenv
+python-multipart
+structlog
+uvicorn
