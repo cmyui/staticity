@@ -19,7 +19,11 @@ DB_NAME = os.environ["DB_NAME"]
 
 DOMAIN = os.environ["DOMAIN"]
 
-UPLOAD_DIR = os.environ["UPLOAD_DIR"]
+S3_ENDPOINT_URL = os.environ["S3_ENDPOINT_URL"]
+S3_REGION = os.environ["S3_REGION"]
+S3_BUCKET_NAME = os.environ["S3_BUCKET_NAME"]
+S3_ACCESS_KEY_ID = os.environ["S3_ACCESS_KEY_ID"]
+S3_SECRET_ACCESS_KEY = os.environ["S3_SECRET_ACCESS_KEY"]
 
 DD_SERVICE = os.environ["DD_SERVICE"]
 DD_ENV = os.environ["DD_ENV"]
