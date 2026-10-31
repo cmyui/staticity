@@ -1,3 +1,4 @@
+aiobotocore
 cryptography
 databases[mysql]==0.5.5
 ddtrace
