@@ -2,7 +2,6 @@ cryptography
 databases[mysql]==0.5.5
 ddtrace
 fastapi
-opencv-python
 python-dotenv
 python-multipart
 structlog

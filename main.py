@@ -5,7 +5,6 @@ import secrets
 
 import fastapi
 import databases
-import upsampling
 
 import logger
 import settings
@@ -93,8 +92,6 @@ async def post_file(file: fastapi.UploadFile = fastapi.File(...),
 
     with open(file_path, "wb") as f:
         f.write(await file.read())
-
-    #upsampling.upsample_image_file(file_path)
 
     file_size = os.path.getsize(file_path)
 
