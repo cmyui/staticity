@@ -2,12 +2,12 @@ CREATE TABLE `users` (
   `id` int NOT NULL AUTO_INCREMENT,
   `name` varchar(16) NOT NULL,
   `safe_name` varchar(16) NOT NULL,
-  `token` char(32) NOT NULL,
+  `token_hash` char(64) NOT NULL COMMENT 'SHA-256 of the token, in hex',
   `priv` int NOT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `users_name_uindex` (`name`),
   UNIQUE KEY `users_safe_name_uindex` (`safe_name`),
-  UNIQUE KEY `users_token_uindex` (`token`)
+  UNIQUE KEY `users_token_hash_uindex` (`token_hash`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE `uploads` (

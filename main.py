@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import atexit
 import contextlib
+import hashlib
 import mimetypes
 import re
 import secrets
@@ -31,47 +32,69 @@ database = databases.Database(dsn(scheme="mysql",
                                   port=settings.DB_PORT,
                                   database=settings.DB_NAME))
 
-# holds the bucket's client (s3) from startup to shutdown
-exit_stack = contextlib.AsyncExitStack()
-
 # letters and digits only, so a file name is never more than one path segment; up to 9 so the longest name
 # (22 characters, a dot and the extension) fits uploads.name
 EXTENSION = re.compile(r"[A-Za-z0-9]{1,9}")
 
-app = fastapi.FastAPI()
+# every upload gets a name of its own and never changes, so browsers and Cloudflare may keep it for good
+CACHE_CONTROL = "public, max-age=31536000, immutable"
 
 
-@app.on_event("startup")
-async def on_startup():
+@contextlib.asynccontextmanager
+async def lifespan(app: fastapi.FastAPI):
     global s3
     await database.connect()
 
     # the uploads, keyed by file name
-    s3 = await exit_stack.enter_async_context(aiobotocore.session.get_session().create_client(
+    async with aiobotocore.session.get_session().create_client(
         "s3",
         endpoint_url=settings.S3_ENDPOINT_URL,
         region_name=settings.S3_REGION,
         aws_access_key_id=settings.S3_ACCESS_KEY_ID,
         aws_secret_access_key=settings.S3_SECRET_ACCESS_KEY,
-    ))
+    ) as s3:
+        yield
 
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    await exit_stack.aclose()
     await database.disconnect()
+
+
+app = fastapi.FastAPI(lifespan=lifespan)
 
 
 # one path segment: a slash, even percent-encoded, matches no route
 @app.get("/{file_name}")
-async def get_file(file_name: str):
+async def get_file(file_name: str, byte_range: str | None = fastapi.Header(None, alias="range")):
+    # the bucket parses the range, and answers with the part (and its Content-Range) when it is satisfiable
     try:
-        upload = await s3.get_object(Bucket=settings.S3_BUCKET_NAME, Key=file_name)
+        upload = await s3.get_object(Bucket=settings.S3_BUCKET_NAME, Key=file_name,
+                                     **({"Range": byte_range} if byte_range else {}))
     except s3.exceptions.NoSuchKey:
         return fastapi.responses.JSONResponse(
             status_code=404,
             content={"error": "File not found"},
         )
+    except s3.exceptions.ClientError as error:
+        if error.response["Error"]["Code"] != "InvalidRange":
+            raise
+        return fastapi.responses.JSONResponse(
+            status_code=fastapi.status.HTTP_416_RANGE_NOT_SATISFIABLE,
+            content={"error": "Range not satisfiable"},
+        )
+
+    media_type = mimetypes.guess_type(file_name)[0] or "text/plain"
+
+    headers = {
+        "Content-Length": str(upload["ContentLength"]),
+        "Accept-Ranges": "bytes",
+        "Cache-Control": CACHE_CONTROL,
+        # the media type is the extension's: browsers mustn't guess another from the contents
+        "X-Content-Type-Options": "nosniff",
+    }
+    if "ContentRange" in upload:
+        headers["Content-Range"] = upload["ContentRange"]
+    # no upload runs scripts as this site, whatever it renders as; Chrome won't show a PDF in a sandbox, though
+    if media_type != "application/pdf":
+        headers["Content-Security-Policy"] = "sandbox"
 
     async def contents():
         async with upload["Body"] as body:
@@ -79,8 +102,9 @@ async def get_file(file_name: str):
                 yield chunk
 
     return fastapi.responses.StreamingResponse(contents(),
-                                               media_type=mimetypes.guess_type(file_name)[0] or "text/plain",
-                                               headers={"Content-Length": str(upload["ContentLength"])})
+                                               status_code=206 if "ContentRange" in upload else 200,
+                                               media_type=media_type,
+                                               headers=headers)
 
 
 async def generate_file_name(extension: str) -> str:
@@ -102,13 +126,14 @@ async def post_file(file: fastapi.UploadFile = fastapi.File(...),
     query = """\
         SELECT id, name, priv
           FROM users
-         WHERE token = :token
+         WHERE token_hash = :token_hash
            AND priv & 1
     """
-    params = {"token": token}
+    # stored as their SHA-256, so the table holds no token that works
+    params = {"token_hash": hashlib.sha256(token.encode()).hexdigest()}
     user = await database.fetch_one(query, params)
     if user is None:
-        logger.warning("Invalid token", token=token, user_agent=user_agent)
+        logger.warning("Invalid token", user_agent=user_agent)
         return fastapi.responses.JSONResponse(
             status_code=fastapi.status.HTTP_403_FORBIDDEN,
             content={"error": "Forbidden"},
@@ -123,10 +148,10 @@ async def post_file(file: fastapi.UploadFile = fastapi.File(...),
 
     file_name = await generate_file_name(extension)
 
-    contents = await file.read()
-    await s3.put_object(Bucket=settings.S3_BUCKET_NAME, Key=file_name, Body=contents)
+    # streamed from the temporary file the upload was received into, rather than read into memory
+    await s3.put_object(Bucket=settings.S3_BUCKET_NAME, Key=file_name, Body=file.file)
 
-    file_size = len(contents)
+    file_size = file.size
 
     query = """\
         INSERT INTO uploads (name, user_id, size)
