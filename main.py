@@ -35,6 +35,9 @@ database = databases.Database(dsn(scheme="mysql",
 # (22 characters, a dot and the extension) fits uploads.name
 EXTENSION = re.compile(r"[A-Za-z0-9]{1,9}")
 
+# every upload gets a name of its own and never changes, so browsers and Cloudflare may keep it for good
+CACHE_CONTROL = "public, max-age=31536000, immutable"
+
 
 @contextlib.asynccontextmanager
 async def lifespan(app: fastapi.FastAPI):
@@ -75,7 +78,8 @@ async def get_file(file_name: str):
 
     return fastapi.responses.StreamingResponse(contents(),
                                                media_type=mimetypes.guess_type(file_name)[0] or "text/plain",
-                                               headers={"Content-Length": str(upload["ContentLength"])})
+                                               headers={"Content-Length": str(upload["ContentLength"]),
+                                                        "Cache-Control": CACHE_CONTROL})
 
 
 async def generate_file_name(extension: str) -> str:
