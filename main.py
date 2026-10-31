@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 import atexit
+import contextlib
 import mimetypes
-import os.path
+import re
 import secrets
 
-import boto3
+import aiobotocore.session
 import fastapi
-import fastapi.concurrency
 import databases
 import upsampling
 
@@ -32,80 +32,68 @@ database = databases.Database(dsn(scheme="mysql",
                                   port=settings.DB_PORT,
                                   database=settings.DB_NAME))
 
-# uploads not in the upload directory are in the bucket, keyed by file name
-s3 = boto3.client("s3",
-                  endpoint_url=settings.S3_ENDPOINT_URL,
-                  region_name=settings.S3_REGION,
-                  aws_access_key_id=settings.S3_ACCESS_KEY_ID,
-                  aws_secret_access_key=settings.S3_SECRET_ACCESS_KEY)
+# holds the bucket's client (s3) from startup to shutdown
+exit_stack = contextlib.AsyncExitStack()
+
+# letters and digits only, so a file name is never more than one path segment; up to 9 so the longest name
+# (22 characters, a dot and the extension) fits uploads.name
+EXTENSION = re.compile(r"[A-Za-z0-9]{1,9}")
 
 app = fastapi.FastAPI()
 
 
 @app.on_event("startup")
 async def on_startup():
+    global s3
     await database.connect()
+
+    # the uploads, keyed by file name
+    s3 = await exit_stack.enter_async_context(aiobotocore.session.get_session().create_client(
+        "s3",
+        endpoint_url=settings.S3_ENDPOINT_URL,
+        region_name=settings.S3_REGION,
+        aws_access_key_id=settings.S3_ACCESS_KEY_ID,
+        aws_secret_access_key=settings.S3_SECRET_ACCESS_KEY,
+    ))
 
 
 @app.on_event("shutdown")
 async def on_shutdown():
+    await exit_stack.aclose()
     await database.disconnect()
 
 
-# not async, so fastapi runs it in a thread while it waits on the bucket
-@app.get("/{file_path:path}")
-def get_file(file_path: str):
-    file_path = os.path.abspath(os.path.join(settings.UPLOAD_DIR, file_path))
-
-    # make sure the file is in the upload directory (fastapi does not protect us)
-    if os.path.commonpath([file_path, settings.UPLOAD_DIR]) != settings.UPLOAD_DIR:
-        return fastapi.responses.JSONResponse(status_code=fastapi.status.HTTP_404_NOT_FOUND,
-                                              content={"error": "File not found"})
-
-    if file_path == settings.UPLOAD_DIR:
-        return fastapi.responses.JSONResponse(
-            status_code=404,
-            content={"error": "File not found"},
-        )
-
-    if os.path.exists(file_path):
-        return fastapi.responses.FileResponse(file_path)
-
-    key = os.path.relpath(file_path, settings.UPLOAD_DIR)
+# one path segment: a slash, even percent-encoded, matches no route
+@app.get("/{file_name}")
+async def get_file(file_name: str):
     try:
-        upload = s3.get_object(Bucket=settings.S3_BUCKET_NAME, Key=key)
+        upload = await s3.get_object(Bucket=settings.S3_BUCKET_NAME, Key=file_name)
     except s3.exceptions.NoSuchKey:
         return fastapi.responses.JSONResponse(
             status_code=404,
             content={"error": "File not found"},
         )
 
-    # the media type FileResponse gives a file of that name
-    return fastapi.responses.StreamingResponse(upload["Body"].iter_chunks(),
-                                               media_type=mimetypes.guess_type(key)[0] or "text/plain",
+    async def contents():
+        async with upload["Body"] as body:
+            async for chunk in body.iter_chunks(1 << 16):
+                yield chunk
+
+    return fastapi.responses.StreamingResponse(contents(),
+                                               media_type=mimetypes.guess_type(file_name)[0] or "text/plain",
                                                headers={"Content-Length": str(upload["ContentLength"])})
 
 
-def file_exists(file_name: str) -> bool:
-    if os.path.exists(os.path.join(settings.UPLOAD_DIR, file_name)):
-        return True
-
-    try:
-        s3.head_object(Bucket=settings.S3_BUCKET_NAME, Key=file_name)
-    except s3.exceptions.ClientError as error:
-        if error.response["Error"]["Code"] == "404":
-            return False
-        raise
-
-    return True
-
-
-def generate_file_name(extension: str) -> str:
+async def generate_file_name(extension: str) -> str:
     num_chars = secrets.randbelow(9) + 8  # 8-16 bytes; 11-22 chars
     while True:
         file_name = f"{secrets.token_urlsafe(num_chars)}.{extension}"
-        if not file_exists(file_name):
-            return file_name
+        try:
+            await s3.head_object(Bucket=settings.S3_BUCKET_NAME, Key=file_name)
+        except s3.exceptions.ClientError as error:
+            if error.response["Error"]["Code"] == "404":
+                return file_name
+            raise
 
 
 @app.post("/")
@@ -127,12 +115,17 @@ async def post_file(file: fastapi.UploadFile = fastapi.File(...),
             content={"error": "Forbidden"},
         )
 
-    extension = file.filename.rsplit(".", maxsplit=1)[1]
-    file_name = await fastapi.concurrency.run_in_threadpool(generate_file_name, extension)
+    _, dot, extension = file.filename.rpartition(".")
+    if not dot or not EXTENSION.fullmatch(extension):
+        return fastapi.responses.JSONResponse(
+            status_code=fastapi.status.HTTP_400_BAD_REQUEST,
+            content={"error": "Invalid file extension"},
+        )
+
+    file_name = await generate_file_name(extension)
 
     contents = await file.read()
-    await fastapi.concurrency.run_in_threadpool(s3.put_object, Bucket=settings.S3_BUCKET_NAME,
-                                                Key=file_name, Body=contents)
+    await s3.put_object(Bucket=settings.S3_BUCKET_NAME, Key=file_name, Body=contents)
 
     #upsampling.upsample_image_file(file_path)
 
