@@ -139,10 +139,10 @@ async def post_file(file: fastapi.UploadFile = fastapi.File(...),
 
     file_name = await generate_file_name(extension)
 
-    contents = await file.read()
-    await s3.put_object(Bucket=settings.S3_BUCKET_NAME, Key=file_name, Body=contents)
+    # streamed from the temporary file the upload was received into, rather than read into memory
+    await s3.put_object(Bucket=settings.S3_BUCKET_NAME, Key=file_name, Body=file.file)
 
-    file_size = len(contents)
+    file_size = file.size
 
     query = """\
         INSERT INTO uploads (name, user_id, size)
