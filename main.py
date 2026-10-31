@@ -1,9 +1,12 @@
 #!/usr/bin/env python
 import atexit
+import mimetypes
 import os.path
 import secrets
 
+import boto3
 import fastapi
+import fastapi.concurrency
 import databases
 import upsampling
 
@@ -29,6 +32,13 @@ database = databases.Database(dsn(scheme="mysql",
                                   port=settings.DB_PORT,
                                   database=settings.DB_NAME))
 
+# uploads not in the upload directory are in the bucket, keyed by file name
+s3 = boto3.client("s3",
+                  endpoint_url=settings.S3_ENDPOINT_URL,
+                  region_name=settings.S3_REGION,
+                  aws_access_key_id=settings.S3_ACCESS_KEY_ID,
+                  aws_secret_access_key=settings.S3_SECRET_ACCESS_KEY)
+
 app = fastapi.FastAPI()
 
 
@@ -42,8 +52,9 @@ async def on_shutdown():
     await database.disconnect()
 
 
+# not async, so fastapi runs it in a thread while it waits on the bucket
 @app.get("/{file_path:path}")
-async def get_file(file_path: str):
+def get_file(file_path: str):
     file_path = os.path.abspath(os.path.join(settings.UPLOAD_DIR, file_path))
 
     # make sure the file is in the upload directory (fastapi does not protect us)
@@ -51,22 +62,50 @@ async def get_file(file_path: str):
         return fastapi.responses.JSONResponse(status_code=fastapi.status.HTTP_404_NOT_FOUND,
                                               content={"error": "File not found"})
 
-    if not os.path.exists(file_path) or file_path == settings.UPLOAD_DIR:
+    if file_path == settings.UPLOAD_DIR:
         return fastapi.responses.JSONResponse(
             status_code=404,
             content={"error": "File not found"},
         )
 
-    return fastapi.responses.FileResponse(file_path)
+    if os.path.exists(file_path):
+        return fastapi.responses.FileResponse(file_path)
+
+    key = os.path.relpath(file_path, settings.UPLOAD_DIR)
+    try:
+        upload = s3.get_object(Bucket=settings.S3_BUCKET_NAME, Key=key)
+    except s3.exceptions.NoSuchKey:
+        return fastapi.responses.JSONResponse(
+            status_code=404,
+            content={"error": "File not found"},
+        )
+
+    # the media type FileResponse gives a file of that name
+    return fastapi.responses.StreamingResponse(upload["Body"].iter_chunks(),
+                                               media_type=mimetypes.guess_type(key)[0] or "text/plain",
+                                               headers={"Content-Length": str(upload["ContentLength"])})
 
 
-def generate_file_name_and_path(extension: str) -> tuple[str, str]:
+def file_exists(file_name: str) -> bool:
+    if os.path.exists(os.path.join(settings.UPLOAD_DIR, file_name)):
+        return True
+
+    try:
+        s3.head_object(Bucket=settings.S3_BUCKET_NAME, Key=file_name)
+    except s3.exceptions.ClientError as error:
+        if error.response["Error"]["Code"] == "404":
+            return False
+        raise
+
+    return True
+
+
+def generate_file_name(extension: str) -> str:
     num_chars = secrets.randbelow(9) + 8  # 8-16 bytes; 11-22 chars
     while True:
         file_name = f"{secrets.token_urlsafe(num_chars)}.{extension}"
-        file_path = os.path.join(settings.UPLOAD_DIR, file_name)
-        if not os.path.exists(file_path):
-            return file_name, file_path
+        if not file_exists(file_name):
+            return file_name
 
 
 @app.post("/")
@@ -89,14 +128,15 @@ async def post_file(file: fastapi.UploadFile = fastapi.File(...),
         )
 
     extension = file.filename.rsplit(".", maxsplit=1)[1]
-    file_name, file_path = generate_file_name_and_path(extension)
+    file_name = await fastapi.concurrency.run_in_threadpool(generate_file_name, extension)
 
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
+    contents = await file.read()
+    await fastapi.concurrency.run_in_threadpool(s3.put_object, Bucket=settings.S3_BUCKET_NAME,
+                                                Key=file_name, Body=contents)
 
     #upsampling.upsample_image_file(file_path)
 
-    file_size = os.path.getsize(file_path)
+    file_size = len(contents)
 
     query = """\
         INSERT INTO uploads (name, user_id, size)
